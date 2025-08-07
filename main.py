@@ -68,17 +68,11 @@ def main():
     st.title("🎓 AI-Powered Personalized Learning Platform")
     st.markdown("*Create a customized learning plan with real educational resources using multi-agent AI*")
     
-    # Show API status
+    # Check API keys
     if not api_status['openai'] or not api_status['tavily']:
         st.error("⚠️ Required API keys are missing. Please check your .env file.")
         display_api_setup_instructions()
         return
-    
-    # Show API status in sidebar
-    with st.sidebar:
-        st.subheader("🔧 API Status")
-        st.success("✅ OpenAI API" if api_status['openai'] else "❌ OpenAI API")
-        st.success("✅ Tavily API" if api_status['tavily'] else "❌ Tavily API")
     
     # Initialize session state
     if 'step' not in st.session_state:
@@ -313,6 +307,17 @@ def render_course_generation():
                 st.session_state.objective_results = result['objective_results']
                 st.session_state.course_generated = True
                 
+                # Create downloadable course data for automatic download
+                import json
+                course_data = {
+                    "course": result['final_course'].dict(),
+                    "objectives": result['learning_objectives'],
+                    "preferences": prefs,
+                    "generated_at": date.today().strftime("%Y-%m-%d")
+                }
+                st.session_state.course_json = json.dumps(course_data, indent=2)
+                st.session_state.course_filename = f"{prefs['topic'].replace(' ', '_')}_course.json"
+                
                 # Validate timeline fit
                 if not validate_course_timeline(result['final_course'], prefs['timeline']):
                     st.warning(f"⚠️ Note: The generated course has {len(result['final_course'].modules)} modules, which may exceed your {prefs['timeline']} timeline. Consider adjusting your timeline or time availability.")
@@ -412,8 +417,20 @@ def render_course_generation():
                 st.info("Feature coming soon!")
         
         with col2:
-            if st.button("💾 Export Course", use_container_width=True):
-                # Create downloadable course data
+            # Automatic download button - replaces the manual export
+            if hasattr(st.session_state, 'course_json') and st.session_state.course_json:
+                st.download_button(
+                    label="📄 Download Course JSON",
+                    data=st.session_state.course_json,
+                    file_name=st.session_state.course_filename,
+                    mime="application/json",
+                    use_container_width=True
+                )
+                # Clear the JSON data after download to prevent re-download
+                del st.session_state.course_json
+                del st.session_state.course_filename
+            else:
+                # Fallback if JSON data is not available
                 import json
                 course_data = {
                     "course": course.dict(),
@@ -422,10 +439,11 @@ def render_course_generation():
                     "generated_at": date.today().strftime("%Y-%m-%d")
                 }
                 st.download_button(
-                    label="📄 Download as JSON",
+                    label="📄 Download Course JSON",
                     data=json.dumps(course_data, indent=2),
                     file_name=f"{prefs['topic'].replace(' ', '_')}_course.json",
-                    mime="application/json"
+                    mime="application/json",
+                    use_container_width=True
                 )
         
         with col3:
