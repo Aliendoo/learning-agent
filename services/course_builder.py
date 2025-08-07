@@ -26,7 +26,7 @@ def build_personalized_course(state: LearningState) -> Dict[str, Any]:
     
     # Calculate totals
     total_resources = sum(len(module.resources) for module in modules)
-    total_time = _calculate_total_time(modules)
+    total_time = _calculate_total_time(modules, prefs.get('timeline', '1 month'))
     
     # Create final course
     course = PersonalizedCourse(
@@ -43,16 +43,29 @@ def build_personalized_course(state: LearningState) -> Dict[str, Any]:
     return {"final_course": course}
 
 def _organize_into_modules(objective_results: List, prefs: Dict) -> List[CourseModule]:
-    """Organize objectives and resources into logical course modules"""
+    """Organize objectives and resources into timeline-appropriate modules"""
     
-    # Simple approach: group objectives into 3-4 modules based on progression
+    timeline = prefs.get('timeline', '1 month')
     num_objectives = len(objective_results)
-    if num_objectives <= 3:
+    
+    # Calculate modules based on timeline
+    timeline_weeks = {
+        "1 week": 1,
+        "2 weeks": 2,
+        "1 month": 4,
+        "2 months": 6,
+        "3 months": 8,
+        "6+ months": 12
+    }
+    
+    target_modules = timeline_weeks.get(timeline, 4)
+    objectives_per_module = max(1, num_objectives // target_modules)
+    
+    # Ensure we don't exceed target modules
+    if num_objectives <= target_modules:
         objectives_per_module = 1
-    elif num_objectives <= 6:
+    elif num_objectives > target_modules * 2:
         objectives_per_module = 2
-    else:
-        objectives_per_module = 3
     
     modules = []
     current_module_objectives = []
@@ -68,7 +81,9 @@ def _organize_into_modules(objective_results: List, prefs: Dict) -> List[CourseM
                 current_module_objectives, 
                 current_module_resources, 
                 len(modules) + 1,
-                prefs
+                prefs,
+                timeline,
+                target_modules
             )
             modules.append(module)
             
@@ -78,7 +93,7 @@ def _organize_into_modules(objective_results: List, prefs: Dict) -> List[CourseM
     
     return modules
 
-def _create_module(objectives: List[str], resources: List, module_number: int, prefs: Dict) -> CourseModule:
+def _create_module(objectives: List[str], resources: List, module_number: int, prefs: Dict, timeline: str, target_modules: int) -> CourseModule:
     """Create a single course module"""
     
     # Determine module progression
@@ -96,7 +111,7 @@ def _create_module(objectives: List[str], resources: List, module_number: int, p
         description_start = "Master advanced techniques"
     
     # Estimate time based on resources
-    estimated_time = _estimate_module_time(resources)
+    estimated_time = _estimate_module_time(resources, timeline, target_modules)
     
     # Create description
     description = f"{description_start} by learning: {', '.join(objectives)}"
@@ -110,29 +125,31 @@ def _create_module(objectives: List[str], resources: List, module_number: int, p
         learning_objectives=objectives
     )
 
-def _estimate_module_time(resources: List) -> str:
-    """Estimate time for a module based on its resources"""
-    if not resources:
-        return "1 week"
+def _estimate_module_time(resources: List, timeline: str, total_modules: int) -> str:
+    """Estimate time for a module based on timeline and total modules"""
     
-    # Simple estimation based on number of resources
-    if len(resources) <= 3:
-        return "3-5 days"
-    elif len(resources) <= 6:
+    timeline_weeks = {
+        "1 week": 1,
+        "2 weeks": 2,
+        "1 month": 4,
+        "2 months": 8,
+        "3 months": 12,
+        "6+ months": 24
+    }
+    
+    total_weeks = timeline_weeks.get(timeline, 4)
+    weeks_per_module = max(1, total_weeks // total_modules)
+    
+    if weeks_per_module == 1:
         return "1 week"
+    elif weeks_per_module <= 2:
+        return f"{weeks_per_module} weeks"
     else:
-        return "1-2 weeks"
+        return f"{weeks_per_module} weeks"
 
-def _calculate_total_time(modules: List[CourseModule]) -> str:
-    """Calculate total course time"""
-    total_weeks = len(modules)
-    
-    if total_weeks <= 2:
-        return f"{total_weeks} weeks"
-    elif total_weeks <= 4:
-        return f"{total_weeks} weeks"
-    else:
-        return f"{total_weeks}+ weeks"
+def _calculate_total_time(modules: List[CourseModule], timeline: str) -> str:
+    """Calculate total course time based on user's timeline preference"""
+    return timeline  # Use the user's actual timeline preference
 
 def _generate_course_overview(topic: str, modules: List[CourseModule], prefs: Dict) -> Dict[str, str]:
     """Generate course title, description, and progression using LLM"""

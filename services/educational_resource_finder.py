@@ -21,6 +21,19 @@ def find_objective_resources(data: Dict[str, Any]) -> Dict[str, Any]:
     
     logging.info(f"Searching for resources for objective: {objective}")
     
+    # Adjust max_results based on timeline
+    timeline = user_preferences.get("timeline", "1 month")
+    timeline_resource_map = {
+        "1 week": 2,      # Fewer resources for short timeline
+        "2 weeks": 3,
+        "1 month": 4,
+        "2 months": 5,
+        "3 months": 6,
+        "6+ months": 8    # More resources for longer timeline
+    }
+    
+    max_results = timeline_resource_map.get(timeline, 4)
+    
     # Initialize Tavily client
     tavily_client = TavilyClient()
     
@@ -34,7 +47,7 @@ def find_objective_resources(data: Dict[str, Any]) -> Dict[str, Any]:
             # Search with Tavily
             results = tavily_client.search(
                 query=query,
-                max_results=3,  # Get 3 results per query
+                max_results=max_results,  # Use timeline-adjusted max_results
                 include_domains=_get_educational_domains(),
                 exclude_domains=_get_excluded_domains()
             )
@@ -51,7 +64,7 @@ def find_objective_resources(data: Dict[str, Any]) -> Dict[str, Any]:
     
     # Remove duplicates and select best resources
     unique_resources = _remove_duplicates(all_resources)
-    best_resources = _select_best_resources(unique_resources, max_resources=4)
+    best_resources = _select_best_resources(unique_resources, max_resources=max_results)
     
     # Create ObjectiveResult
     objective_result = ObjectiveResult(
@@ -59,7 +72,7 @@ def find_objective_resources(data: Dict[str, Any]) -> Dict[str, Any]:
         resources=best_resources
     )
     
-    logging.info(f"Found {len(best_resources)} resources for objective: {objective}")
+    logging.info(f"Found {len(best_resources)} resources for objective: {objective} (timeline: {timeline})")
     
     return {"objective_results": [objective_result]}
 

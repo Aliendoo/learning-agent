@@ -12,6 +12,48 @@ load_dotenv()
 from models import LearningPreferences, LearningState
 from core.learning_graph import build_learning_graph
 
+def calculate_objectives_from_timeline(timeline: str, time_availability: str) -> int:
+    """
+    Calculate appropriate number of objectives based on timeline and daily time availability
+    """
+    timeline_weeks = {
+        "1 week": 1,
+        "2 weeks": 2, 
+        "1 month": 4,
+        "2 months": 8,
+        "3 months": 12,
+        "6+ months": 24
+    }
+    
+    daily_hours = {
+        "30 minutes": 0.5,
+        "1 hour": 1,
+        "2 hours": 2,
+        "3+ hours": 3
+    }
+    
+    weeks = timeline_weeks.get(timeline, 4)
+    hours_per_day = daily_hours.get(time_availability, 1)
+    total_hours = weeks * 7 * hours_per_day
+    
+    # Estimate objectives based on available time
+    # Assume 2-3 hours per objective on average
+    objectives = max(2, min(12, int(total_hours / 2.5)))
+    
+    return objectives
+
+def validate_course_timeline(course, user_timeline: str) -> bool:
+    """Validate that the generated course fits within the user's timeline"""
+    timeline_weeks = {
+        "1 week": 1, "2 weeks": 2, "1 month": 4,
+        "2 months": 8, "3 months": 12, "6+ months": 24
+    }
+    
+    target_weeks = timeline_weeks.get(user_timeline, 4)
+    estimated_weeks = len(course.modules)  # Simple estimation
+    
+    return estimated_weeks <= target_weeks
+
 def main():
     st.set_page_config(
         page_title="🎓 AI Learning Platform",
@@ -237,11 +279,14 @@ def render_course_generation():
                 # Prepare state for the workflow
                 current_date = date.today().strftime("%Y-%m-%d")
                 
+                # Calculate number of objectives based on timeline and time availability
+                num_objectives = calculate_objectives_from_timeline(prefs['timeline'], prefs['time_availability'])
+                
                 learning_state = LearningState(
                     user_topic=prefs['topic'],
                     user_preferences=prefs,
                     current_date=current_date,
-                    num_objectives=6  # Generate 6 learning objectives
+                    num_objectives=num_objectives
                 )
                 
                 # Update progress
@@ -267,6 +312,10 @@ def render_course_generation():
                 st.session_state.learning_objectives = result['learning_objectives']
                 st.session_state.objective_results = result['objective_results']
                 st.session_state.course_generated = True
+                
+                # Validate timeline fit
+                if not validate_course_timeline(result['final_course'], prefs['timeline']):
+                    st.warning(f"⚠️ Note: The generated course has {len(result['final_course'].modules)} modules, which may exceed your {prefs['timeline']} timeline. Consider adjusting your timeline or time availability.")
                 
                 progress_bar.progress(1.0)
                 with status_container:
