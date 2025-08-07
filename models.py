@@ -1,6 +1,8 @@
-# models.py
+# models.py - Updated for multi-agent learning workflow
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict
+from typing_extensions import Annotated
+import operator
 
 class LearningPreferences(BaseModel):
     topic: str = Field(default="", description="Main learning topic")
@@ -50,14 +52,12 @@ class LearningResource(BaseModel):
     difficulty: str = Field(default="", description="Difficulty level")
     relevance_score: float = Field(default=0.0, description="Relevance to user preferences")
     quality_score: float = Field(default=0.0, description="Overall quality score")
-    credibility_score: float = Field(default=0.0, description="Source credibility score")
-    engagement_score: float = Field(default=0.0, description="Engagement metrics score")
-    depth_score: float = Field(default=0.0, description="Content depth score")
-    recency_score: float = Field(default=0.0, description="Content recency score")
-    topic_category: str = Field(default="", description="Detected topic category")
-    safety_warnings: List[str] = Field(default_factory=list, description="Safety warnings")
-    source_credibility: str = Field(default="", description="Credibility level")
     objective_match: str = Field(default="", description="Learning objective this resource matches")
+
+class ObjectiveResult(BaseModel):
+    """Result of searching for resources for a specific learning objective"""
+    objective: str = Field(description="The learning objective")
+    resources: List[LearningResource] = Field(description="Resources found for this objective")
 
 class CourseModule(BaseModel):
     title: str = Field(description="Module title")
@@ -75,11 +75,13 @@ class PersonalizedCourse(BaseModel):
     total_resources: int = Field(description="Total number of resources")
     difficulty_progression: str = Field(description="How difficulty progresses")
 
-class TopicAnalysis(BaseModel):
-    """Result of AI topic detection and analysis"""
-    broad_category: str = Field(description="Broad topic category")
-    subcategory: str = Field(description="Specific subcategory")
-    suggested_learning_styles: List[str] = Field(description="Suggested learning styles")
-    suggested_content_formats: List[str] = Field(description="Suggested content formats")
-    suggested_engagement_level: str = Field(description="Suggested engagement level")
-    safety_requirements: List[str] = Field(default_factory=list, description="Safety requirements")
+# New state model for the learning workflow
+class LearningState(BaseModel):
+    """State management for the learning workflow"""
+    user_topic: str = Field(default="", description="Learning topic from user")
+    user_preferences: Dict = Field(default_factory=dict, description="User learning preferences")
+    learning_objectives: List[str] = Field(default_factory=list, description="Generated learning objectives")
+    objective_results: Annotated[List[ObjectiveResult], operator.add] = Field(default_factory=list, description="Results for each objective")
+    final_course: Optional[PersonalizedCourse] = Field(default=None, description="Final generated course")
+    current_date: str = Field(default="", description="Current date")
+    num_objectives: int = Field(default=6, description="Number of objectives to generate")

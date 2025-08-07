@@ -1,21 +1,21 @@
-# main.py - Complete Learning Platform Application
+# main.py - Updated for multi-agent learning workflow
 import streamlit as st
 import os
 from dotenv import load_dotenv
+from datetime import date
 from typing import Dict
 
 # Load environment variables
 load_dotenv()
 
-# Import our modules
-from models import LearningPreferences
-from chatbot import ConversationalLearningChatbot
-from course_generator import EnhancedCourseGenerator
+# Import our new workflow components
+from models import LearningPreferences, LearningState
+from core.learning_graph import build_learning_graph
 
 def main():
     st.set_page_config(
         page_title="🎓 AI Learning Platform",
-        page_icon="🎓",
+        page_icon="🎓", 
         layout="wide",
         initial_sidebar_state="expanded"
     )
@@ -24,11 +24,11 @@ def main():
     api_status = check_api_setup()
     
     st.title("🎓 AI-Powered Personalized Learning Platform")
-    st.markdown("*Create a customized learning plan with real educational resources*")
+    st.markdown("*Create a customized learning plan with real educational resources using multi-agent AI*")
     
     # Show API status
-    if not api_status['openai']:
-        st.error("⚠️ OpenAI API key is required to use this application")
+    if not api_status['openai'] or not api_status['tavily']:
+        st.error("⚠️ Required API keys are missing. Please check your .env file.")
         display_api_setup_instructions()
         return
     
@@ -36,24 +36,15 @@ def main():
     with st.sidebar:
         st.subheader("🔧 API Status")
         st.success("✅ OpenAI API" if api_status['openai'] else "❌ OpenAI API")
-        st.success("✅ YouTube API" if api_status['youtube'] else "⚠️ YouTube API (Limited)")
-        st.success("✅ Google Search API" if api_status['google_search'] else "❌ Google Search API")
-        
-        if not api_status['youtube']:
-            st.info("💡 Add YouTube API key in .env for video resources")
-        if not api_status['google_search']:
-            st.info("💡 Add GOOGLE_SEARCH_API_KEY and GOOGLE_SEARCH_ENGINE_ID in .env for article/course resources")
-            st.success("✅ Web scraping fallback available for educational resources")
+        st.success("✅ Tavily API" if api_status['tavily'] else "❌ Tavily API")
     
     # Initialize session state
     if 'step' not in st.session_state:
         st.session_state.step = 'form'
-    if 'chatbot' not in st.session_state:
-        st.session_state.chatbot = None
-    if 'chat_messages' not in st.session_state:
-        st.session_state.chat_messages = []
     if 'course_generated' not in st.session_state:
         st.session_state.course_generated = False
+    if 'generated_course' not in st.session_state:
+        st.session_state.generated_course = None
     
     # Progress indicator
     render_progress_indicator()
@@ -62,24 +53,20 @@ def main():
     
     # Navigation
     if st.session_state.step == 'form':
-        render_initial_form()
-    elif st.session_state.step == 'chat':
-        render_chatbot()
-    elif st.session_state.step == 'course':
+        render_learning_form()
+    elif st.session_state.step == 'generation':
         render_course_generation()
 
 def check_api_setup() -> Dict[str, bool]:
     """Check which APIs are properly configured"""
     return {
         'openai': bool(os.getenv('OPENAI_API_KEY')),
-        'youtube': bool(os.getenv('YOUTUBE_API_KEY')),
-        'google_search': bool(os.getenv('GOOGLE_SEARCH_API_KEY') and os.getenv('GOOGLE_SEARCH_ENGINE_ID')),
-        'udemy': bool(os.getenv('UDEMY_CLIENT_ID') and os.getenv('UDEMY_CLIENT_SECRET'))
+        'tavily': bool(os.getenv('TAVILY_API_KEY'))
     }
 
 def render_progress_indicator():
     """Render progress indicator"""
-    progress_steps = ['Form', 'Chat', 'Course']
+    progress_steps = ['Form', 'Generation']
     current_step_index = progress_steps.index(st.session_state.step.title())
     
     st.markdown("### 📊 Progress")
@@ -93,12 +80,12 @@ def render_progress_indicator():
             else:
                 st.text(f"⏳ Step {i+1}: {step}")
 
-def render_initial_form():
-    """Render the initial preference collection form"""
-    st.header("📝 Step 1: Tell Us About Your Learning Goals")
-    st.markdown("Let's start with some basic information about what you want to learn:")
+def render_learning_form():
+    """Render the learning preferences form"""
+    st.header("📝 What do you want to learn?")
+    st.markdown("Tell us about your learning goals and we'll create a personalized course with real educational resources:")
     
-    with st.form("initial_form"):
+    with st.form("learning_form"):
         # Create two columns for better layout
         col1, col2 = st.columns(2)
         
@@ -159,7 +146,19 @@ def render_initial_form():
                 help="What formats do you prefer?"
             )
         
-        submitted = st.form_submit_button("Continue to Chat Planning 💬", use_container_width=True)
+        engagement_style = st.selectbox(
+            "🎮 Learning style preference:",
+            ["", "Fun and engaging", "Structured and systematic", "Mixed approach"],
+            help="How do you prefer to learn?"
+        )
+        
+        special_requirements = st.text_area(
+            "📝 Any special requirements?",
+            placeholder="e.g., Focus on practical projects, certification preparation, specific tools...",
+            help="Optional: Any specific needs or constraints"
+        )
+        
+        submitted = st.form_submit_button("🚀 Generate My Learning Course", use_container_width=True, type="primary")
         
         if submitted:
             # Validate required fields
@@ -177,8 +176,8 @@ def render_initial_form():
             if missing_fields:
                 st.error(f"Please fill in these required fields: {', '.join(missing_fields)}")
             else:
-                # Store form data and initialize chatbot
-                form_data = {
+                # Store preferences and move to generation
+                preferences = {
                     "topic": topic,
                     "current_level": current_level.lower(),
                     "goal_level": goal_level.lower(),
@@ -187,108 +186,19 @@ def render_initial_form():
                     "time_availability": time_availability,
                     "learning_style": [style.lower().replace(" (hands-on)", "").replace("/writing", "") for style in learning_style],
                     "content_format": [fmt.lower().replace("/articles", "").replace(" exercises", "").replace(" projects", "") for fmt in content_format],
-                    "engagement_style": "",  # Will be filled in chat
+                    "engagement_style": engagement_style.lower() if engagement_style else "mixed",
+                    "special_requirements": special_requirements
                 }
                 
-                st.session_state.chatbot = ConversationalLearningChatbot(form_data)
-                st.session_state.step = 'chat'
-                
-                # Create natural opening message
-                opening_message = f"""Great! I can see you want to learn {topic}. That's exciting! 
-
-Let me ask you a few more questions to make sure I create the perfect learning plan for you. 
-
-To start with - would you prefer a more structured, step-by-step approach, or would you like something more fun and engaging with interactive elements? And feel free to let me know if you have any specific requirements or if there's anything from the form you'd like to adjust!"""
-                
-                st.session_state.chat_messages = [{
-                    "role": "assistant",
-                    "content": opening_message
-                }]
+                st.session_state.learning_preferences = preferences
+                st.session_state.step = 'generation'
                 st.rerun()
 
-def render_chatbot():
-    """Render the chatbot interface"""
-    st.header("💬 Step 2: Let's Refine Your Learning Plan")
-    st.markdown("Now let's have a conversation to perfect your learning plan. Feel free to ask questions, make requests, or change anything!")
-    
-    # Show current preferences in sidebar
-    with st.sidebar:
-        st.subheader("📋 Current Preferences")
-        if st.session_state.chatbot:
-            prefs = st.session_state.chatbot.preferences.dict()
-            for key, value in prefs.items():
-                if value:  # Only show filled fields
-                    formatted_key = key.replace('_', ' ').title()
-                    if isinstance(value, list):
-                        value_str = ', '.join([str(v).title() for v in value])
-                    else:
-                        value_str = str(value).title()
-                    st.text(f"{formatted_key}: {value_str}")
-        
-        # Show progress
-        if st.session_state.chatbot:
-            missing = st.session_state.chatbot.preferences.get_missing_fields()
-            complete_fields = 10 - len(missing)  # Total fields minus missing
-            progress = complete_fields / 10
-            st.progress(progress)
-            st.caption(f"Progress: {complete_fields}/10 fields complete")
-            
-            if not missing:
-                st.success("✅ All information collected!")
-    
-    # Chat interface
-    chat_container = st.container()
-    
-    with chat_container:
-        # Display chat history
-        for message in st.session_state.chat_messages:
-            with st.chat_message(message["role"]):
-                st.markdown(message["content"])
-    
-    # Chat input
-    if prompt := st.chat_input("Type your response here... (e.g., 'I prefer visual learning' or 'Can we change the timeline?')"):
-        # Add user message
-        st.session_state.chat_messages.append({"role": "user", "content": prompt})
-        
-        # Get bot response
-        if st.session_state.chatbot:
-            response = st.session_state.chatbot.chat_turn(prompt)
-            st.session_state.chat_messages.append({"role": "assistant", "content": response})
-            
-            # Check if conversation is complete
-            if st.session_state.chatbot.conversation_complete:
-                st.balloons()
-        
-        st.rerun()
-    
-    # Generate course button (only show when ready)
-    if st.session_state.chatbot and (st.session_state.chatbot.preferences.is_complete() or st.session_state.chatbot.user_ready_to_generate):
-        st.markdown("---")
-        if st.button("🚀 Generate My Learning Course", use_container_width=True, type="primary"):
-            st.session_state.step = 'course'
-            st.rerun()
-    
-    # Navigation buttons
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("← Back to Form", use_container_width=True):
-            st.session_state.step = 'form'
-            st.session_state.chatbot = None
-            st.session_state.chat_messages = []
-            st.rerun()
-
 def render_course_generation():
-    """Render the course generation with real resources"""
-    st.header("📚 Step 3: Your Personalized Course")
+    """Render the course generation with multi-agent workflow"""
+    st.header("🤖 Generating Your Personalized Course")
     
-    if not st.session_state.chatbot:
-        st.error("No chatbot session found. Please start over.")
-        if st.button("🔄 Start Over"):
-            st.session_state.step = 'form'
-            st.rerun()
-        return
-    
-    prefs = st.session_state.chatbot.preferences.dict()
+    prefs = st.session_state.learning_preferences
     
     # Show user preferences summary
     with st.expander("📋 Your Learning Profile", expanded=False):
@@ -311,35 +221,76 @@ def render_course_generation():
         if prefs.get('special_requirements'):
             st.markdown(f"**Special Requirements:** {prefs['special_requirements']}")
     
-    # Generate course automatically
+    # Generate course automatically using multi-agent workflow
     if not st.session_state.course_generated:
-        st.info("🔍 Searching real educational platforms (YouTube, educational websites) for the best resources!")
+        st.info("🤖 Starting multi-agent course generation workflow...")
         
-        with st.spinner("🔍 Searching educational platforms for the best resources..."):
+        # Create status containers for real-time updates
+        status_container = st.container()
+        progress_bar = st.progress(0)
+        
+        with st.spinner("🔍 AI agents are working on your course..."):
             try:
-                course_generator = EnhancedCourseGenerator()
-                result = course_generator.generate_course_with_real_resources(prefs)
+                # Build the learning workflow graph
+                graph = build_learning_graph()
                 
+                # Prepare state for the workflow
+                current_date = date.today().strftime("%Y-%m-%d")
+                
+                learning_state = LearningState(
+                    user_topic=prefs['topic'],
+                    user_preferences=prefs,
+                    current_date=current_date,
+                    num_objectives=6  # Generate 6 learning objectives
+                )
+                
+                # Update progress
+                with status_container:
+                    st.info("🎯 Generating learning objectives...")
+                progress_bar.progress(0.2)
+                
+                # Execute the multi-agent workflow
+                result = graph.invoke(learning_state.dict())
+                
+                # Update progress
+                with status_container:
+                    st.info("🔍 Finding educational resources...")
+                progress_bar.progress(0.6)
+                
+                # Update progress
+                with status_container:
+                    st.info("📚 Building your personalized course...")
+                progress_bar.progress(0.9)
+                
+                # Store results
+                st.session_state.generated_course = result['final_course']
+                st.session_state.learning_objectives = result['learning_objectives']
+                st.session_state.objective_results = result['objective_results']
                 st.session_state.course_generated = True
-                st.session_state.generated_course = result['course']
-                st.session_state.all_resources = result['all_resources']
-                st.session_state.topic_analysis = result.get('topic_analysis', None)
                 
-                st.success("🎉 Course generated successfully with real resources!")
+                progress_bar.progress(1.0)
+                with status_container:
+                    st.success("🎉 Course generated successfully!")
+                
                 st.rerun()
                 
             except Exception as e:
                 st.error(f"Error generating course: {e}")
-                st.info("Please try again or check your internet connection.")
+                st.info("Please try again or check your API keys.")
+                
+                # Add debug info
+                st.expander("Debug Information").write({
+                    "Error": str(e),
+                    "Preferences": prefs
+                })
     
     # Display generated course
-    if st.session_state.course_generated:
+    if st.session_state.course_generated and st.session_state.generated_course:
         course = st.session_state.generated_course
-        all_resources = st.session_state.all_resources
-        topic_analysis = st.session_state.get('topic_analysis', None)
+        objectives = st.session_state.learning_objectives
         
         # Course overview
-        st.subheader("🎓 Course Overview")
+        st.subheader("🎓 Your Personalized Course")
         col1, col2, col3 = st.columns(3)
         
         with col1:
@@ -351,26 +302,13 @@ def render_course_generation():
         
         st.info(f"**{course.title}**\n\n{course.description}")
         
-        # Display topic analysis if available
-        if topic_analysis:
-            st.subheader("🧠 AI Analysis")
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                st.markdown(f"**Category:** {topic_analysis.broad_category.title()}")
-                st.markdown(f"**Subcategory:** {topic_analysis.subcategory.title()}")
-            
-            with col2:
-                st.markdown(f"**Learning Styles:** {', '.join(topic_analysis.suggested_learning_styles)}")
-                st.markdown(f"**Content Formats:** {', '.join(topic_analysis.suggested_content_formats)}")
-            
-            with col3:
-                st.markdown(f"**Engagement:** {topic_analysis.suggested_engagement_level.title()}")
-                if topic_analysis.safety_requirements:
-                    st.markdown("**Safety:** ⚠️ See warnings below")
+        # Display learning objectives
+        st.subheader("🎯 Learning Objectives")
+        for i, objective in enumerate(objectives, 1):
+            st.markdown(f"{i}. {objective}")
         
-        # Display modules with real resources
-        st.subheader("📖 Learning Modules")
+        # Display course modules with resources
+        st.subheader("📖 Course Modules")
         
         for i, module in enumerate(course.modules, 1):
             with st.expander(f"Module {i}: {module.title}", expanded=i==1):
@@ -387,53 +325,34 @@ def render_course_generation():
                     st.markdown(f"**Level:** {module.difficulty}")
                     st.markdown(f"**Resources:** {len(module.resources)}")
                 
-                # Real resources
+                # Display resources
                 if module.resources:
-                    st.markdown("**📚 Resources:**")
+                    st.markdown("**📚 Educational Resources:**")
                     for resource in module.resources:
-                        icon = {"video": "📺", "article": "📄", "course": "🎓"}.get(resource.type, "📚")
+                        icon = {"video": "📺", "article": "📄", "course": "🎓", "documentation": "📚"}.get(resource.type, "📚")
                         
                         # Create clickable link
                         st.markdown(f"{icon} **[{resource.title}]({resource.url})**")
                         
-                        # Display objective match if available
-                        if hasattr(resource, 'objective_match') and resource.objective_match:
-                            st.markdown(f"🎯 **Matches:** {resource.objective_match}")
+                        # Display objective match
+                        if resource.objective_match:
+                            st.markdown(f"🎯 **Covers:** {resource.objective_match}")
                         
-                        # Display quality and source information
+                        # Display resource details
                         col1, col2 = st.columns([3, 1])
                         with col1:
                             st.markdown(f"   └ *Source: {resource.source}* | *Time: {resource.estimated_time}*")
                             if resource.description:
-                                st.markdown(f"   └ {resource.description[:150]}...")
+                                st.markdown(f"   └ {resource.description[:100]}...")
                         
                         with col2:
-                            # Quality score indicator
-                            if hasattr(resource, 'quality_score') and resource.quality_score > 0:
-                                quality_color = "🟢" if resource.quality_score >= 7.5 else "🟡" if resource.quality_score >= 6.0 else "🔴"
-                                st.markdown(f"{quality_color} **{resource.quality_score}/10**")
-                        
-                        # Display safety warnings
-                        if hasattr(resource, 'safety_warnings') and resource.safety_warnings:
-                            for warning in resource.safety_warnings:
-                                st.warning(f"⚠️ {warning}")
+                            if resource.relevance_score > 0:
+                                score_color = "🟢" if resource.relevance_score >= 6 else "🟡" if resource.relevance_score >= 3 else "🔴"
+                                st.markdown(f"{score_color} **Score: {resource.relevance_score:.1f}**")
                         
                         st.markdown("")
                 else:
-                    st.info("No specific resources found for this module.")
-        
-        # Resource summary
-        st.subheader("📊 Resource Summary")
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            st.metric("🎥 Videos", len(all_resources.get('videos', [])))
-        with col2:
-            st.metric("📄 Articles", len(all_resources.get('articles', [])))
-        with col3:
-            st.metric("🎓 Courses", len(all_resources.get('courses', [])))
-        with col4:
-            st.metric("📚 Documentation", len(all_resources.get('documentation', [])))
+                    st.info("No resources found for this module.")
         
         # Action buttons
         st.markdown("---")
@@ -441,19 +360,21 @@ def render_course_generation():
         
         with col1:
             if st.button("📅 Schedule Learning", use_container_width=True):
-                st.info("Calendar integration coming in Phase 3!")
+                st.info("Feature coming soon!")
         
         with col2:
             if st.button("💾 Export Course", use_container_width=True):
                 # Create downloadable course data
-                course_json = {
+                import json
+                course_data = {
                     "course": course.dict(),
+                    "objectives": objectives,
                     "preferences": prefs,
-                    "generated_at": str(st.session_state.get('generation_time', 'Unknown'))
+                    "generated_at": date.today().strftime("%Y-%m-%d")
                 }
                 st.download_button(
                     label="📄 Download as JSON",
-                    data=str(course_json),
+                    data=json.dumps(course_data, indent=2),
                     file_name=f"{prefs['topic'].replace(' ', '_')}_course.json",
                     mime="application/json"
                 )
@@ -461,7 +382,7 @@ def render_course_generation():
         with col3:
             if st.button("🔄 Start Over", use_container_width=True):
                 # Reset everything
-                for key in ['step', 'chatbot', 'chat_messages', 'course_generated', 'generated_course', 'all_resources']:
+                for key in ['step', 'course_generated', 'generated_course', 'learning_preferences']:
                     if key in st.session_state:
                         del st.session_state[key]
                 st.rerun()
@@ -477,32 +398,24 @@ def display_api_setup_instructions():
         ```bash
         # Required
         OPENAI_API_KEY=your_openai_key
-        
-        # Google Search API (Recommended)
-        GOOGLE_SEARCH_API_KEY=your_google_search_key
-        GOOGLE_SEARCH_ENGINE_ID=your_search_engine_id
-        
-        # YouTube Data API (Optional)
-        YOUTUBE_API_KEY=your_youtube_key
-        
-        # Udemy API (Optional)
-        UDEMY_CLIENT_ID=your_udemy_id
-        UDEMY_CLIENT_SECRET=your_udemy_secret
+        TAVILY_API_KEY=your_tavily_key
         ```
         
         **Get API Keys:**
         1. **OpenAI**: platform.openai.com
-        2. **Google Search**: Google Cloud Console → Custom Search API
-        3. **YouTube**: Google Cloud Console
-        4. **Udemy**: Udemy Affiliate Program
+        2. **Tavily**: tavily.com (for web search)
         
-        **Note**: If Google Search API is not configured, the system will automatically use web scraping fallback to find educational resources from trusted sites like Medium, Dev.to, and FreeCodeCamp.
+        **Note**: Both APIs are required for the multi-agent workflow to function properly.
         """)
 
 if __name__ == "__main__":
-    # Check if OpenAI API key is set
+    # Check if required API keys are set
     if not os.getenv('OPENAI_API_KEY'):
         st.error("🚨 Please set your OPENAI_API_KEY in the .env file")
+        st.stop()
+    
+    if not os.getenv('TAVILY_API_KEY'):
+        st.error("🚨 Please set your TAVILY_API_KEY in the .env file")
         st.stop()
     
     main()
